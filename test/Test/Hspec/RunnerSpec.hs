@@ -12,14 +12,27 @@ import           Test.Hspec.Util (getEnv)
 
 import qualified Test.Hspec as H
 import qualified Test.Hspec.Runner as H
-import qualified Test.Hspec.Core as H (Result(..))
+import qualified Test.Hspec.Core as H (Example(..), Result(..), Params(..))
 import qualified Test.Hspec.Formatters as H (silent)
+
+import qualified Test.QuickCheck as QC
+import           Data.IORef
 
 ignoreExitCode :: IO () -> IO ()
 ignoreExitCode action = action `E.catch` \e -> let _ = e :: ExitCode in return ()
 
 ignoreUserInterrupt :: IO () -> IO ()
 ignoreUserInterrupt action = action `E.catch` \e -> unless (e == E.UserInterrupt) (E.throwIO e)
+
+qcArgsSpy :: IO (IO QC.Args, ParamsSpy)
+qcArgsSpy = do
+  ref <- newIORef defaultParams
+  return (H.paramsQuickCheckArgs <$> readIORef ref, ParamsSpy ref)
+
+data ParamsSpy = ParamsSpy (IORef H.Params)
+
+instance H.Example ParamsSpy where
+  evaluateExample p (ParamsSpy ref) = writeIORef ref p >> return H.Success
 
 main :: IO ()
 main = hspec spec
@@ -100,11 +113,11 @@ spec = do
         silence . ignoreExitCode . withArgs ["--qc-max-success", "23"] . H.hspec $ do
           H.it "foo" False
 
-        m <- newMock
+        (handle, spy) <- qcArgsSpy
+
         silence . withArgs ["--rerun"] . H.hspec $ do
-          H.it "foo" $ property $ do
-            mockAction m
-        mockCounter m `shouldReturn` 23
+          H.it "foo" spy
+        QC.maxSuccess <$> handle `shouldReturn` 23
 
       context "when there is no failure report in the environment" $ do
         it "runs everything" $ do
